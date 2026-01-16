@@ -1,0 +1,29 @@
+{
+  "name": "millsheet-renamer-google-vision",
+  "version": "1.0.0",
+  "description": "PDF text extraction and file renaming tool using Google Cloud Vision API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "pdf",
+    "ocr",
+    "google-vision",
+    "japanese",
+    "text-extraction"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@google-cloud/vision": "^5.3.4",
+    "dotenv": "^16.3.0",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "pdf-poppler": "^0.2.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
