@@ -93,7 +93,23 @@ def convert_pdf_page_to_image(pdf_path: Path, page_num: int = 1) -> Path:
     ]
     
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        # Hide console window on Windows
+        startupinfo = None
+        creationflags = 0
+        if sys.platform == 'win32':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            creationflags = subprocess.CREATE_NO_WINDOW
+        
+        subprocess.run(
+            command, 
+            check=True, 
+            capture_output=True, 
+            text=True,
+            startupinfo=startupinfo,
+            creationflags=creationflags
+        )
         
         # pdftoppm appends page number suffix
         generated_path = Path(f"{output_base}-{page_num}.png")
@@ -187,6 +203,7 @@ PRIORITY_MANUFACTURERS = [
 def extract_date(text: str) -> Optional[str]:
     """
     Extract issue date from Japanese text (発行日)
+    Prioritizes dates near "発行日" or "Date of Issue" labels.
     Supports formats: 2024年1月15日, 2024/01/15, 2024-01-15, R6.1.15, 令和6年1月15日
     Also supports English formats: AUG . 04 . 2025, Aug 04, 2025, etc.
     
@@ -204,11 +221,37 @@ def extract_date(text: str) -> Optional[str]:
         'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12
     }
     
+    def parse_date(match_text: str) -> Optional[str]:
+        """Parse date from matched text"""
+        # Try YYYY.MM.DD or YYYY/MM/DD or YYYY-MM-DD
+        date_match = re.search(r'(\d{4})[./\-](\d{1,2})[./\-](\d{1,2})', match_text)
+        if date_match:
+            year = int(date_match.group(1))
+            month = int(date_match.group(2))
+            day = int(date_match.group(3))
+            return f"{year % 100:02d}-{month:02d}-{day:02d}"
+        return None
+    
+    # Priority 1: Look for date near "発行日" or "Date of Issue" label
+    issue_date_patterns = [
+        r'発行日[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
+        r'Date\s*of\s*Issue[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
+        r'発行年月日[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
+    ]
+    
+    for pattern in issue_date_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            date_str = match.group(1)
+            result = parse_date(date_str)
+            if result:
+                return result
+    
     year = None
     month = None
     day = None
     
-    # Pattern 1: English month format (AUG . 04 . 2025, Aug 04, 2025, AUG-04-2025, etc.)
+    # Pattern 2: English month format (AUG . 04 . 2025, Aug 04, 2025, AUG-04-2025, etc.)
     eng_patterns = [
         # AUG . 04 . 2025 or AUG.04.2025
         r'([A-Z]{3,9})\s*[.\-/,]\s*(\d{1,2})\s*[.\-/,]\s*(\d{4})',
@@ -250,6 +293,8 @@ def extract_date(text: str) -> Optional[str]:
         (r'(\d{4})[/](\d{1,2})[/](\d{1,2})', None),
         # 2024-01-15
         (r'(\d{4})-(\d{1,2})-(\d{1,2})', None),
+        # 2024.01.15
+        (r'(\d{4})\.(\d{1,2})\.(\d{1,2})', None),
         # 令和6年1月15日 (Japanese era)
         (r'令和(\d{1,2})年(\d{1,2})月(\d{1,2})日', 'reiwa'),
         # R6.1.15 or R06.01.15
@@ -380,8 +425,10 @@ def extract_dimensions(text: str) -> Optional[str]:
         dimension_section = dim_match.group(0) + dim_match.group(1)
     
     # Dimension patterns (ordered by specificity)
-    # Note: Width may contain comma (e.g., 1,535) which needs to be handled
+    # Note: Width may contain comma (e.g., 1,535) or decimal (e.g., 1.540 meaning 1540)
     patterns = [
+        # Pattern: 22.00X1.540XCOIL (OCR misread comma as decimal - e.g., 1.540 = 1540)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2}\.\d{3})\s*[x×X]\s*(COIL|コイル|C)\b',
         # Pattern: 1.60X1,535XCOIL (with comma in width) - HIGHEST PRIORITY for Tokyo Steel
         r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(COIL|コイル|C)\b',
         # Pattern: 1.6x1535xCOIL (thickness x width x COIL/C)
@@ -390,8 +437,8 @@ def extract_dimensions(text: str) -> Optional[str]:
         r'(\d+\.?\d*)\s*[x×X]\s*(\d{3,4})\s*[x×X]\s*(\d{3,4})',
         # Pattern: with comma in width for numeric length
         r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(\d{3,4})',
-        # Pattern: 22.00x1.540xCOIL (with decimal width)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(COIL|コイル|C)\b',
+        # Pattern: with decimal width for numeric length (OCR misread)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2}\.\d{3})\s*[x×X]\s*(\d{3,4})',
         # Pattern: t1.6 x 1219 x COIL or t1.6x1219xCOIL
         r't\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(COIL|コイル|C|\d+\.?\d*)',
         # Pattern: generic AxBxC (thickness x width x length)
@@ -415,20 +462,46 @@ def extract_dimensions(text: str) -> Optional[str]:
                 groups = match.groups()
                 if len(groups) == 3:
                     thickness = groups[0]
-                    width = groups[1].replace(',', '')  # Remove comma from width
+                    width_raw = groups[1]
                     length = groups[2]
+                    
+                    # Process width: handle comma (1,535) or decimal misread (1.540 -> 1540)
+                    width = width_raw.replace(',', '')
+                    # Check if width looks like misread decimal (e.g., 1.540 should be 1540)
+                    if '.' in width and re.match(r'^\d{1,2}\.\d{3}$', width):
+                        # Convert 1.540 to 1540 (remove decimal point)
+                        width = width.replace('.', '')
                     
                     # Validate dimensions
                     if is_valid_dimension(thickness, width, length):
                         # Normalize COIL/コイル to C
                         if length.upper() in ['COIL', 'コイル']:
                             length = 'C'
+                        # Format thickness (remove unnecessary decimals like 22.00 -> 22)
+                        try:
+                            t_float = float(thickness)
+                            if t_float == int(t_float):
+                                thickness = str(int(t_float))
+                        except:
+                            pass
                         return f"{thickness}x{width}x{length}"
                         
                 elif len(groups) == 2:
                     thickness = groups[0]
-                    width = groups[1].replace(',', '')  # Remove comma from width
+                    width_raw = groups[1]
+                    
+                    # Process width
+                    width = width_raw.replace(',', '')
+                    if '.' in width and re.match(r'^\d{1,2}\.\d{3}$', width):
+                        width = width.replace('.', '')
+                    
                     if is_valid_dimension(thickness, width):
+                        try:
+                            t_float = float(thickness)
+                            if t_float == int(t_float):
+                                thickness = str(int(t_float))
+                        except:
+                            pass
                         return f"{thickness}x{width}"
     
     return None
