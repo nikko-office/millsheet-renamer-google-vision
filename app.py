@@ -470,6 +470,12 @@ class MillsheetRenamerApp(CTkDnD):
             if not extracted_text:
                 raise RuntimeError("テキストを抽出できませんでした")
             
+            # Debug: Save extracted text to file for inspection
+            debug_file = pdf_path.parent / f"{pdf_path.stem}_OCR_DEBUG.txt"
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(extracted_text)
+            print(f"  - OCRテキストを保存: {debug_file.name}")
+            
             # Parse text
             parsed_info = parse_extracted_text(extracted_text)
             
@@ -491,8 +497,10 @@ class MillsheetRenamerApp(CTkDnD):
                 "new_path": str(new_path),
                 "parsed": {
                     "date": parsed_info["date"],
-                    "company": parsed_info["company_name"],
-                    "type": parsed_info["document_type"]
+                    "material": parsed_info["material"],
+                    "dimensions": parsed_info["dimensions"],
+                    "manufacturer": parsed_info["manufacturer"],
+                    "charge_no": parsed_info["charge_no"]
                 }
             }
             

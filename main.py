@@ -141,20 +141,77 @@ def extract_text_from_pdf(pdf_path: Path, client: vision.ImageAnnotatorClient) -
 
 
 # ============================================================================
-# Text Parsing - Extract Date, Company Name, Document Type
+# Text Parsing - Extract Date, Material, Dimensions, Manufacturer
+# For Mill Sheets / Inspection Certificates
 # ============================================================================
+
+# Priority manufacturers (these take precedence over other company names)
+PRIORITY_MANUFACTURERS = [
+    ('東京製鉄', ['東京製鉄', '東京製鐵', '東京製鉄所', '東京製鐵所', 'TOKYO STEEL', 'TOKYOSTEEL']),
+    ('中山製鋼', ['中山製鋼', '中山製鉄', '中山製鋼所', '中山製鉄所', 'NAKAYAMA STEEL', 'NAKAYAMA']),
+    ('神戸製鋼', ['神戸製鋼', '神戸製鉄', '神戸製鋼所', '神戸製鉄所', 'KOBE STEEL', 'KOBELCO']),
+]
+
 
 def extract_date(text: str) -> Optional[str]:
     """
-    Extract date from Japanese text
+    Extract issue date from Japanese text (発行日)
     Supports formats: 2024年1月15日, 2024/01/15, 2024-01-15, R6.1.15, 令和6年1月15日
+    Also supports English formats: AUG . 04 . 2025, Aug 04, 2025, etc.
     
     Args:
         text: Extracted text
     
     Returns:
-        Formatted date (YYYY-MM-DD) or None
+        Formatted date (YY-MM-DD) or None
     """
+    # English month name mapping
+    month_map = {
+        'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+        'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+        'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'JUNE': 6,
+        'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12
+    }
+    
+    year = None
+    month = None
+    day = None
+    
+    # Pattern 1: English month format (AUG . 04 . 2025, Aug 04, 2025, AUG-04-2025, etc.)
+    eng_patterns = [
+        # AUG . 04 . 2025 or AUG.04.2025
+        r'([A-Z]{3,9})\s*[.\-/,]\s*(\d{1,2})\s*[.\-/,]\s*(\d{4})',
+        # 04 AUG 2025 or 04-AUG-2025
+        r'(\d{1,2})\s*[.\-/,]\s*([A-Z]{3,9})\s*[.\-/,]\s*(\d{4})',
+        # 2025.AUG.04 or 2025-AUG-04
+        r'(\d{4})\s*[.\-/,]\s*([A-Z]{3,9})\s*[.\-/,]\s*(\d{1,2})',
+    ]
+    
+    for i, pattern in enumerate(eng_patterns):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            groups = match.groups()
+            if i == 0:  # MON DD YYYY
+                month_str, day_str, year_str = groups
+                month = month_map.get(month_str.upper())
+                day = int(day_str)
+                year = int(year_str)
+            elif i == 1:  # DD MON YYYY
+                day_str, month_str, year_str = groups
+                month = month_map.get(month_str.upper())
+                day = int(day_str)
+                year = int(year_str)
+            elif i == 2:  # YYYY MON DD
+                year_str, month_str, day_str = groups
+                month = month_map.get(month_str.upper())
+                day = int(day_str)
+                year = int(year_str)
+            
+            if year and month and day:
+                # Format as YY-MM-DD (2-digit year)
+                return f"{year % 100:02d}-{month:02d}-{day:02d}"
+    
+    # Japanese/numeric patterns
     patterns = [
         # 2024年1月15日 or 2024年01月15日
         (r'(\d{4})年(\d{1,2})月(\d{1,2})日', None),
@@ -185,97 +242,253 @@ def extract_date(text: str) -> Optional[str]:
             month = int(match.group(2))
             day = int(match.group(3))
             
-            # Format as YYYY-MM-DD
-            return f"{year}-{month:02d}-{day:02d}"
+            # Format as YY-MM-DD (2-digit year)
+            return f"{year % 100:02d}-{month:02d}-{day:02d}"
     
     return None
 
 
-def extract_company_name(text: str) -> Optional[str]:
+def extract_material(text: str) -> Optional[str]:
     """
-    Extract company name from Japanese text
-    Looks for common patterns in business documents
+    Extract material/steel grade from mill sheet text (材質)
+    Common grades: SS400, SPHC, SPCC, S45C, SUS304, etc.
     
     Args:
         text: Extracted text
     
     Returns:
-        Company name or None
+        Material grade or None
     """
+    # Steel grade patterns (common Japanese/JIS standards)
+    patterns = [
+        # SS series (general structural steel)
+        r'\b(SS\s*[234]\d{2})\b',
+        # SPHC, SPCC, SPCD, SPCE (hot/cold rolled steel)
+        r'\b(SPH[CDE]|SPC[CDE])\b',
+        # SECC, SECD (electro-galvanized)
+        r'\b(SEC[CD])\b',
+        # SGCC, SGHC (hot-dip galvanized)
+        r'\b(SG[CH]C)\b',
+        # S-C series (carbon steel for machine structural use)
+        r'\b(S\d{2}C)\b',
+        # SCM series (chromium molybdenum steel)
+        r'\b(SCM\d{3})\b',
+        # SUS series (stainless steel)
+        r'\b(SUS\s*\d{3}[A-Z]?)\b',
+        # SK series (carbon tool steel)
+        r'\b(SK\d{1,2})\b',
+        # SM series (welded structural steel)
+        r'\b(SM\d{3}[A-C]?)\b',
+        # STK series (carbon steel tubes)
+        r'\b(STK\d{3})\b',
+        # STKR series (rectangular tubes)
+        r'\b(STKR\d{3})\b',
+        # Generic pattern for other grades
+        r'\b(S[A-Z]{1,3}\d{2,3}[A-Z]?)\b',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            material = match.group(1).upper().replace(' ', '')
+            return material
+    
+    return None
+
+
+def extract_dimensions(text: str) -> Optional[str]:
+    """
+    Extract dimensions from mill sheet text (寸法)
+    Formats: 厚さ x 幅 x 長さ/COIL, t1.6 x 1219 x C, etc.
+    
+    Mill sheet dimensions typically have:
+    - Thickness: small number (0.1 - 100mm)
+    - Width: larger number (100 - 3000mm)  
+    - Length: even larger or COIL
+    
+    Args:
+        text: Extracted text
+    
+    Returns:
+        Dimensions string or None
+    """
+    
+    def is_valid_dimension(thickness_str, width_str, length_str=None):
+        """Check if dimensions are realistic for steel sheets"""
+        try:
+            # Remove commas from numbers (e.g., 1,535 -> 1535)
+            thickness = float(str(thickness_str).replace(',', ''))
+            width = float(str(width_str).replace(',', ''))
+            # Thickness should be small (0.1-100mm), width should be larger (100-5000mm)
+            # Width should be significantly larger than thickness
+            if thickness < 0.1 or thickness > 100:
+                return False
+            if width < 100 or width > 5000:
+                return False
+            if width <= thickness:
+                return False
+            # Length check: skip if COIL/C, otherwise must be >= 100
+            if length_str:
+                length_upper = str(length_str).upper()
+                if length_upper not in ['COIL', 'コイル', 'C']:
+                    try:
+                        length = float(str(length_str).replace(',', ''))
+                        if length < 100:
+                            return False
+                    except ValueError:
+                        # Non-numeric length that's not COIL - still valid
+                        pass
+            return True
+        except (ValueError, TypeError):
+            return False
+    
+    # Priority 1: Look near DIMENSIONS or 寸法 label
+    dimension_section = None
+    dim_match = re.search(r'(?:DIMENSIONS?|寸法)[^\n]*\n?([^\n]+)', text, re.IGNORECASE)
+    if dim_match:
+        dimension_section = dim_match.group(0) + dim_match.group(1)
+    
+    # Dimension patterns (ordered by specificity)
+    # Note: Width may contain comma (e.g., 1,535) which needs to be handled
+    patterns = [
+        # Pattern: 1.60X1,535XCOIL (with comma in width) - HIGHEST PRIORITY for Tokyo Steel
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(COIL|コイル|C)\b',
+        # Pattern: 1.6x1535xCOIL (thickness x width x COIL/C)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{3,4})\s*[x×X]\s*(COIL|コイル|C)\b',
+        # Pattern: 1.6X1219X2438 (thickness x width x length - common in tables)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{3,4})\s*[x×X]\s*(\d{3,4})',
+        # Pattern: with comma in width for numeric length
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(\d{3,4})',
+        # Pattern: 22.00x1.540xCOIL (with decimal width)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(COIL|コイル|C)\b',
+        # Pattern: t1.6 x 1219 x COIL or t1.6x1219xCOIL
+        r't\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(COIL|コイル|C|\d+\.?\d*)',
+        # Pattern: generic AxBxC (thickness x width x length)
+        r'(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)',
+        # Pattern: 板厚1.6 幅1219
+        r'板厚\s*(\d+\.?\d*)\s*.*?幅\s*(\d+\.?\d*)',
+        # Pattern: 1.6t x 1219W or 1.6tx1219W
+        r'(\d+\.?\d*)\s*[tT]\s*[x×X]\s*(\d+\.?\d*)\s*[wW]?',
+    ]
+    
+    # First try to find in dimension section
+    search_texts = [dimension_section, text] if dimension_section else [text]
+    
+    for search_text in search_texts:
+        if not search_text:
+            continue
+            
+        for pattern in patterns:
+            matches = re.finditer(pattern, search_text, re.IGNORECASE)
+            for match in matches:
+                groups = match.groups()
+                if len(groups) == 3:
+                    thickness = groups[0]
+                    width = groups[1].replace(',', '')  # Remove comma from width
+                    length = groups[2]
+                    
+                    # Validate dimensions
+                    if is_valid_dimension(thickness, width, length):
+                        # Normalize COIL/コイル to C
+                        if length.upper() in ['COIL', 'コイル']:
+                            length = 'C'
+                        return f"{thickness}x{width}x{length}"
+                        
+                elif len(groups) == 2:
+                    thickness = groups[0]
+                    width = groups[1].replace(',', '')  # Remove comma from width
+                    if is_valid_dimension(thickness, width):
+                        return f"{thickness}x{width}"
+    
+    return None
+
+
+def extract_charge_no(text: str) -> Optional[str]:
+    """
+    Extract charge number (溶鋼番号/鋼番) from mill sheet text
+    
+    Args:
+        text: Extracted text
+    
+    Returns:
+        Charge number or None
+    """
+    # Patterns for charge number
+    patterns = [
+        # Near label: 溶鋼番号, CHARGE No, 鋼番
+        r'(?:溶[鋼銅]番号|CHARGE\s*N[oO]\.?|鋼番)\s*[:\s]*([A-Z0-9]{4,12})',
+        # Pattern: alphanumeric 5-10 chars that looks like charge no (e.g., 5E20142, AD8075)
+        r'\b([A-Z]{1,2}\d{4,8})\b',
+        r'\b(\d{1,2}[A-Z]\d{4,6})\b',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            charge_no = match.group(1).upper()
+            # Validate: should be 5-12 chars, alphanumeric
+            if 4 <= len(charge_no) <= 12 and charge_no.isalnum():
+                return charge_no
+    
+    return None
+
+
+def extract_manufacturer(text: str) -> Optional[str]:
+    """
+    Extract manufacturer name from mill sheet text (メーカー名)
+    Priority: 東京製鉄, 中山製鋼, 神戸製鋼
+    
+    Args:
+        text: Extracted text
+    
+    Returns:
+        Manufacturer name or None
+    """
+    # First, check for priority manufacturers
+    for display_name, variants in PRIORITY_MANUFACTURERS:
+        for variant in variants:
+            if variant.upper() in text.upper():
+                return display_name
+    
+    # If no priority manufacturer found, try to find other company names
     patterns = [
         # Company name patterns with suffixes
-        r'([^\s\n]{2,20}(?:株式会社|有限会社|合同会社|㈱|㈲))',
-        r'(?:株式会社|有限会社|合同会社)([^\s\n]{2,20})',
-        # Pattern: 会社名：XXX or 会社名:XXX
-        r'会社名[：:]\s*([^\n]+)',
-        # Pattern: 製造者：XXX
-        r'製造者[：:]\s*([^\n]+)',
-        # Pattern: 販売者：XXX
-        r'販売者[：:]\s*([^\n]+)',
-        # Pattern: 発行者：XXX
-        r'発行[者元][：:]\s*([^\n]+)',
-        # Pattern: メーカー：XXX
-        r'メーカー[：:]\s*([^\n]+)',
+        r'([^\s\n]{2,15}(?:製鉄|製鋼|製鐵))',
+        r'([^\s\n]{2,15}(?:株式会社|㈱))',
+        r'(?:製造者|メーカー)[：:]\s*([^\n]+)',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            company_name = match.group(1).strip()
-            # Filter out unlikely matches
-            if 2 <= len(company_name) <= 30:
-                return company_name
+            name = match.group(1).strip()
+            if 2 <= len(name) <= 20:
+                return name
     
     return None
 
 
-def extract_document_type(text: str) -> str:
-    """
-    Extract document type from Japanese text
-    Common types: ミルシート, 検査証明書, 成績表, 納品書, etc.
-    
-    Args:
-        text: Extracted text
-    
-    Returns:
-        Document type or 'document'
-    """
-    document_types = [
-        (r'ミルシート|MILL\s*SHEET', 'ミルシート'),
-        (r'検査[証成][明績]書', '検査証明書'),
-        (r'試験成績[書表]', '試験成績書'),
-        (r'材料証明書', '材料証明書'),
-        (r'品質証明書', '品質証明書'),
-        (r'納品書', '納品書'),
-        (r'請求書', '請求書'),
-        (r'見積書', '見積書'),
-        (r'注文書', '注文書'),
-        (r'仕様書', '仕様書'),
-        (r'成績表', '成績表'),
-        (r'証明書', '証明書'),
-    ]
-    
-    for pattern, doc_type in document_types:
-        if re.search(pattern, text, re.IGNORECASE):
-            return doc_type
-    
-    return 'document'
-
-
 def parse_extracted_text(text: str) -> dict:
     """
-    Parse all relevant information from extracted text
+    Parse mill sheet information from extracted text
     
     Args:
         text: Full extracted text
     
     Returns:
-        Dictionary with parsed information
+        Dictionary with parsed information:
+        - date: 発行日
+        - material: 材質
+        - dimensions: 寸法
+        - manufacturer: メーカー名
+        - charge_no: 溶鋼番号
     """
     return {
         'date': extract_date(text),
-        'company_name': extract_company_name(text),
-        'document_type': extract_document_type(text),
+        'material': extract_material(text),
+        'dimensions': extract_dimensions(text),
+        'manufacturer': extract_manufacturer(text),
+        'charge_no': extract_charge_no(text),
         'raw_text': text
     }
 
@@ -313,11 +526,11 @@ def sanitize_for_filename(text: Optional[str]) -> str:
 
 def generate_new_filename(info: dict, original_name: str) -> str:
     """
-    Generate new filename based on extracted information
-    Format: [DATE]_[COMPANY]_[DOCTYPE].pdf
+    Generate new filename based on extracted mill sheet information
+    Format: [発行日]_[材質]_[寸法]_[メーカー名]_[Charge No].pdf
     
     Args:
-        info: Parsed information
+        info: Parsed information (date, material, dimensions, manufacturer, charge_no)
         original_name: Original filename (fallback)
     
     Returns:
@@ -325,19 +538,28 @@ def generate_new_filename(info: dict, original_name: str) -> str:
     """
     parts = []
     
-    # Add date if found
-    if info['date']:
+    # Add date (発行日) if found
+    if info.get('date'):
         parts.append(info['date'])
     
-    # Add company name if found
-    if info['company_name']:
-        parts.append(sanitize_for_filename(info['company_name']))
+    # Add material (材質) if found
+    if info.get('material'):
+        parts.append(sanitize_for_filename(info['material']))
     
-    # Add document type
-    parts.append(sanitize_for_filename(info['document_type']))
+    # Add dimensions (寸法) if found
+    if info.get('dimensions'):
+        parts.append(sanitize_for_filename(info['dimensions']))
+    
+    # Add manufacturer (メーカー名) if found
+    if info.get('manufacturer'):
+        parts.append(sanitize_for_filename(info['manufacturer']))
+    
+    # Add charge number (溶鋼番号) if found
+    if info.get('charge_no'):
+        parts.append(sanitize_for_filename(info['charge_no']))
     
     # If no meaningful parts, use original name
-    if not parts or (len(parts) == 1 and parts[0] == 'document'):
+    if not parts:
         base_name = Path(original_name).stem
         return f"{sanitize_for_filename(base_name)}_renamed.pdf"
     
@@ -396,9 +618,11 @@ def process_pdf(pdf_path: Path, client: vision.ImageAnnotatorClient) -> dict:
         print("  - 抽出テキストを解析中...")
         parsed_info = parse_extracted_text(extracted_text)
         
-        print(f"    日付: {parsed_info['date'] or '見つかりません'}")
-        print(f"    会社名: {parsed_info['company_name'] or '見つかりません'}")
-        print(f"    文書タイプ: {parsed_info['document_type']}")
+        print(f"    発行日: {parsed_info['date'] or '見つかりません'}")
+        print(f"    材質: {parsed_info['material'] or '見つかりません'}")
+        print(f"    寸法: {parsed_info['dimensions'] or '見つかりません'}")
+        print(f"    メーカー: {parsed_info['manufacturer'] or '見つかりません'}")
+        print(f"    Charge No: {parsed_info['charge_no'] or '見つかりません'}")
         
         # Step 3: Generate new filename
         new_filename = generate_new_filename(parsed_info, original_name)
@@ -416,8 +640,10 @@ def process_pdf(pdf_path: Path, client: vision.ImageAnnotatorClient) -> dict:
             'new_name': unique_filename,
             'parsed': {
                 'date': parsed_info['date'],
-                'company': parsed_info['company_name'],
-                'type': parsed_info['document_type']
+                'material': parsed_info['material'],
+                'dimensions': parsed_info['dimensions'],
+                'manufacturer': parsed_info['manufacturer'],
+                'charge_no': parsed_info['charge_no']
             }
         }
         
