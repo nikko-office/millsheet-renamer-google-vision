@@ -38,6 +38,32 @@ def get_vision_client() -> vision.ImageAnnotatorClient:
 # PDF to Image Conversion
 # ============================================================================
 
+def get_pdftoppm_path() -> str:
+    """Get the path to pdftoppm executable"""
+    import sys
+    
+    # Check for bundled poppler (in same folder as exe or script)
+    if getattr(sys, 'frozen', False):
+        app_dir = Path(sys.executable).parent
+    else:
+        app_dir = Path(__file__).parent
+    
+    # Look for poppler in app directory
+    poppler_paths = [
+        app_dir / "poppler" / "bin" / "pdftoppm.exe",
+        app_dir / "poppler" / "pdftoppm.exe",
+        app_dir / "poppler-24.08.0" / "Library" / "bin" / "pdftoppm.exe",
+        app_dir / "bin" / "pdftoppm.exe",
+    ]
+    
+    for poppler_path in poppler_paths:
+        if poppler_path.exists():
+            return str(poppler_path)
+    
+    # Fall back to system PATH
+    return "pdftoppm"
+
+
 def convert_pdf_page_to_image(pdf_path: Path, page_num: int = 1) -> Path:
     """
     Convert PDF page to PNG image using pdftoppm (Poppler)
@@ -52,9 +78,12 @@ def convert_pdf_page_to_image(pdf_path: Path, page_num: int = 1) -> Path:
     temp_dir = tempfile.mkdtemp()
     output_base = Path(temp_dir) / f"page_{datetime.now().timestamp()}"
     
+    # Get pdftoppm path (bundled or system)
+    pdftoppm = get_pdftoppm_path()
+    
     # pdftoppm command: -png output format, -f/-l for page range, -r for DPI
     command = [
-        "pdftoppm",
+        pdftoppm,
         "-png",
         "-f", str(page_num),
         "-l", str(page_num),
@@ -76,6 +105,8 @@ def convert_pdf_page_to_image(pdf_path: Path, page_num: int = 1) -> Path:
         
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"PDF to image conversion failed: {e.stderr}")
+    except FileNotFoundError:
+        raise RuntimeError("Poppler (pdftoppm) が見つかりません。poppler フォルダを EXE と同じ場所に配置してください。")
 
 
 # ============================================================================

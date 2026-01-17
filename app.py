@@ -11,6 +11,7 @@ from typing import Callable
 import subprocess
 import sys
 import shutil
+import traceback
 
 # Handle PyInstaller frozen executable
 if getattr(sys, 'frozen', False):
@@ -28,11 +29,39 @@ from dotenv import load_dotenv
 load_dotenv(APP_DIR / '.env')
 
 # Auto-detect credentials file if not set
+CREDENTIALS_FOUND = False
 if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
     for cred_file in APP_DIR.glob('*.json'):
         if cred_file.name != 'package.json':
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = str(cred_file)
+            CREDENTIALS_FOUND = True
             break
+else:
+    CREDENTIALS_FOUND = True
+
+# Check if Poppler (pdftoppm) is available
+def check_poppler():
+    """Check if pdftoppm is available (bundled or system)"""
+    # Check bundled poppler first
+    poppler_paths = [
+        APP_DIR / "poppler" / "bin" / "pdftoppm.exe",
+        APP_DIR / "poppler" / "pdftoppm.exe",
+        APP_DIR / "poppler-24.08.0" / "Library" / "bin" / "pdftoppm.exe",
+        APP_DIR / "bin" / "pdftoppm.exe",
+    ]
+    
+    for poppler_path in poppler_paths:
+        if poppler_path.exists():
+            return True
+    
+    # Check system PATH
+    try:
+        result = subprocess.run(['pdftoppm', '-v'], capture_output=True, text=True)
+        return True
+    except FileNotFoundError:
+        return False
+
+POPPLER_AVAILABLE = check_poppler()
 
 import customtkinter as ctk
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -306,6 +335,16 @@ class MillsheetRenamerApp(CTkDnD):
     def _build_ui(self):
         """Build the user interface"""
         
+        # Check for missing requirements and show warnings
+        warnings = []
+        if not POPPLER_AVAILABLE:
+            warnings.append("⚠️ Poppler (pdftoppm) が見つかりません\n   → PDFの変換ができません\n   → Popplerをインストールしてください")
+        if not CREDENTIALS_FOUND:
+            warnings.append("⚠️ Google Cloud 認証キー (.json) が見つかりません\n   → EXEと同じフォルダに配置してください")
+        
+        if warnings:
+            self._show_setup_warning(warnings)
+        
         # Header
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.pack(fill="x", padx=30, pady=(25, 15))
@@ -400,6 +439,65 @@ class MillsheetRenamerApp(CTkDnD):
             corner_radius=2
         )
         self.progress_bar.set(0)
+    
+    def _show_setup_warning(self, warnings: list[str]):
+        """Show setup warning dialog"""
+        warning_text = "\n\n".join(warnings)
+        
+        # Create warning window
+        warning_window = ctk.CTkToplevel(self)
+        warning_window.title("セットアップ確認")
+        warning_window.geometry("500x300")
+        warning_window.configure(fg_color=COLORS["bg_dark"])
+        warning_window.transient(self)
+        warning_window.grab_set()
+        
+        # Center the window
+        warning_window.update_idletasks()
+        x = (warning_window.winfo_screenwidth() - 500) // 2
+        y = (warning_window.winfo_screenheight() - 300) // 2
+        warning_window.geometry(f"500x300+{x}+{y}")
+        
+        # Warning icon
+        icon_label = ctk.CTkLabel(
+            warning_window,
+            text="⚠️",
+            font=ctk.CTkFont(size=48),
+            text_color=COLORS["error"]
+        )
+        icon_label.pack(pady=(20, 10))
+        
+        # Warning title
+        title_label = ctk.CTkLabel(
+            warning_window,
+            text="必要な設定が見つかりません",
+            font=ctk.CTkFont(family="Yu Gothic UI", size=18, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # Warning message
+        msg_label = ctk.CTkLabel(
+            warning_window,
+            text=warning_text,
+            font=ctk.CTkFont(family="Yu Gothic UI", size=13),
+            text_color=COLORS["text_secondary"],
+            justify="left"
+        )
+        msg_label.pack(pady=(0, 20), padx=30)
+        
+        # OK button
+        ok_btn = ctk.CTkButton(
+            warning_window,
+            text="OK",
+            font=ctk.CTkFont(family="Yu Gothic UI", size=14),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            corner_radius=8,
+            width=100,
+            command=warning_window.destroy
+        )
+        ok_btn.pack(pady=(10, 20))
     
     def _open_last_folder(self):
         """Open the last processed folder in file explorer"""
