@@ -1,0 +1,12 @@
+# Google Cloud Vision API
+google-cloud-vision>=3.7.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# GUI
+customtkinter>=5.2.0
+tkinterdnd2>=0.3.0
+
+# Build
+pyinstaller>=6.0.0
