@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from datetime import datetime
@@ -233,10 +234,11 @@ def extract_date(text: str) -> Optional[str]:
         return None
     
     # Priority 1: Look for date near "発行日" or "Date of Issue" label
+    # Use DOTALL to match across newlines
     issue_date_patterns = [
-        r'発行日[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
-        r'Date\s*of\s*Issue[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
-        r'発行年月日[^\d]*(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})',
+        r'発行日[\s\S]{0,50}?(\d{4}[./]\d{1,2}[./]\d{1,2})',
+        r'Date\s*of\s*Issue[\s\S]{0,30}?(\d{4}[./]\d{1,2}[./]\d{1,2})',
+        r'発行年月日[\s\S]{0,30}?(\d{4}[./]\d{1,2}[./]\d{1,2})',
     ]
     
     for pattern in issue_date_patterns:
@@ -426,27 +428,32 @@ def extract_dimensions(text: str) -> Optional[str]:
     
     # Dimension patterns (ordered by specificity)
     # Note: Width may contain comma (e.g., 1,535) or decimal (e.g., 1.540 meaning 1540)
+    # OCR may insert spaces: "22. 00X1, 540XCOIL"
     patterns = [
-        # Pattern: 22.00X1.540XCOIL (OCR misread comma as decimal - e.g., 1.540 = 1540)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2}\.\d{3})\s*[x×X]\s*(COIL|コイル|C)\b',
-        # Pattern: 1.60X1,535XCOIL (with comma in width) - HIGHEST PRIORITY for Tokyo Steel
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(COIL|コイル|C)\b',
+        # Pattern: "22. 00X1, 540XCOIL" (OCR with spaces after . and ,)
+        r'(\d{1,2})\.\s*(\d{2})\s*[xX×]\s*(\d)[,.]?\s*(\d{3})\s*[xX×]\s*(COIL|コイル|C)\b',
+        # Pattern: 22.00X1.540XCOIL (NO spaces, decimal width like 1.540 = 1540mm)
+        r'(\d{1,2}\.?\d{0,2})[xX×](\d\.\d{3})[xX×](COIL|コイル|C)\b',
+        # Pattern: 22.00X1.540XCOIL with optional spaces
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{1,2}\.\d{3})\s*[xX×]\s*(COIL|コイル|C)\b',
+        # Pattern: 1.60X1,535XCOIL (with comma in width)
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{1,2},\d{3})\s*[xX×]\s*(COIL|コイル|C)\b',
         # Pattern: 1.6x1535xCOIL (thickness x width x COIL/C)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{3,4})\s*[x×X]\s*(COIL|コイル|C)\b',
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{3,4})\s*[xX×]\s*(COIL|コイル|C)\b',
         # Pattern: 1.6X1219X2438 (thickness x width x length - common in tables)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{3,4})\s*[x×X]\s*(\d{3,4})',
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{3,4})\s*[xX×]\s*(\d{3,4})',
         # Pattern: with comma in width for numeric length
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2},\d{3})\s*[x×X]\s*(\d{3,4})',
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{1,2},\d{3})\s*[xX×]\s*(\d{3,4})',
         # Pattern: with decimal width for numeric length (OCR misread)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d{1,2}\.\d{3})\s*[x×X]\s*(\d{3,4})',
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d{1,2}\.\d{3})\s*[xX×]\s*(\d{3,4})',
         # Pattern: t1.6 x 1219 x COIL or t1.6x1219xCOIL
-        r't\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(COIL|コイル|C|\d+\.?\d*)',
+        r't\s*(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)\s*[xX×]\s*(COIL|コイル|C|\d+\.?\d*)',
         # Pattern: generic AxBxC (thickness x width x length)
-        r'(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)',
+        r'(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)',
         # Pattern: 板厚1.6 幅1219
         r'板厚\s*(\d+\.?\d*)\s*.*?幅\s*(\d+\.?\d*)',
         # Pattern: 1.6t x 1219W or 1.6tx1219W
-        r'(\d+\.?\d*)\s*[tT]\s*[x×X]\s*(\d+\.?\d*)\s*[wW]?',
+        r'(\d+\.?\d*)\s*[tT]\s*[xX×]\s*(\d+\.?\d*)\s*[wW]?',
     ]
     
     # First try to find in dimension section
@@ -460,7 +467,26 @@ def extract_dimensions(text: str) -> Optional[str]:
             matches = re.finditer(pattern, search_text, re.IGNORECASE)
             for match in matches:
                 groups = match.groups()
-                if len(groups) == 3:
+                
+                # Handle 5-group pattern: "22. 00X1, 540XCOIL" -> (22, 00, 1, 540, COIL)
+                if len(groups) == 5:
+                    thickness = f"{groups[0]}.{groups[1]}"  # "22" + "00" -> "22.00"
+                    width = f"{groups[2]}{groups[3]}"  # "1" + "540" -> "1540"
+                    length = groups[4]
+                    
+                    if is_valid_dimension(thickness, width, length):
+                        # Format thickness (22.00 -> 22)
+                        try:
+                            t_float = float(thickness)
+                            if t_float == int(t_float):
+                                thickness = str(int(t_float))
+                        except:
+                            pass
+                        if length.upper() in ['COIL', 'コイル']:
+                            length = 'C'
+                        return f"{thickness}x{width}x{length}"
+                
+                elif len(groups) == 3:
                     thickness = groups[0]
                     width_raw = groups[1]
                     length = groups[2]
@@ -503,6 +529,30 @@ def extract_dimensions(text: str) -> Optional[str]:
                         except:
                             pass
                         return f"{thickness}x{width}"
+    
+    # FALLBACK: Try to get thickness from dimension-like pattern near Size/寸法
+    # Look for patterns like "22.00X" or "1.6X" (thickness followed by X)
+    # Must be near dimension labels or have decimal point to be more specific
+    fallback_patterns = [
+        # Near 寸法 or Size label
+        r'(?:寸法|Size)[\s\S]{0,100}?(\d{1,2}\.\d{1,2})\s*[xX×]',
+        # Decimal thickness pattern (e.g., 22.00X, 1.60X) - more specific
+        r'(\d{1,2}\.\d{2})\s*[xX×]\s*\d',
+    ]
+    
+    for pattern in fallback_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            thickness = match.group(1)
+            try:
+                t_float = float(thickness)
+                # Only accept reasonable thickness values (0.1 - 100mm)
+                if 0.1 <= t_float <= 100:
+                    if t_float == int(t_float):
+                        return str(int(t_float))
+                    return str(round(t_float, 1))
+            except:
+                pass
     
     return None
 

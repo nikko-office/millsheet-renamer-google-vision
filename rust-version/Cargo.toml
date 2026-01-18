@@ -1,0 +1,68 @@
+[package]
+name = "millsheet_renamer"
+version = "0.1.0"
+edition = "2024"
+authors = ["nikko"]
+description = "PDF mill sheet renamer using Google Cloud Vision API"
+license = "MIT"
+
+[dependencies]
+# GUI framework
+eframe = "0.31"
+egui = "0.31"
+egui_extras = { version = "0.31", features = ["image"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for Vision API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# JSON serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Environment variables
+dotenvy = "0.15"
+
+# Regular expressions
+regex = "1"
+
+# Date/time handling
+chrono = "0.4"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Base64 encoding (for Vision API)
+base64 = "0.22"
+
+# Image handling
+image = "0.25"
+
+# File dialogs
+rfd = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Google Cloud authentication
+jsonwebtoken = "9"
+open = "5.3.3"
+zip = "7.1.0"
+
+[target.'cfg(windows)'.dependencies]
+# Windows-specific
+winapi = { version = "0.3", features = ["wincon", "processenv"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[[bin]]
+name = "millsheet_renamer"
+path = "src/main.rs"

@@ -389,6 +389,15 @@ class MillsheetRenamerApp(CTkDnD):
         )
         self.drop_zone.pack(fill="x", padx=30, pady=(0, 20))
         
+        # Processing overlay (hidden by default)
+        self.processing_label = ctk.CTkLabel(
+            self,
+            text="",
+            font=ctk.CTkFont(family="Yu Gothic UI", size=16, weight="bold"),
+            text_color=COLORS["accent"]
+        )
+        self.processing_label.pack(pady=(0, 10))
+        
         # Results section
         results_header = ctk.CTkFrame(self, fg_color="transparent")
         results_header.pack(fill="x", padx=30, pady=(10, 5))
@@ -556,7 +565,8 @@ class MillsheetRenamerApp(CTkDnD):
         self.after(0, lambda: self._set_status(status_text))
         self.after(0, lambda s=successful, f=failed: self._update_stats(s, f))
         
-        # Enable folder button
+        # Clear processing label and enable folder button
+        self.after(0, lambda: self.processing_label.configure(text=""))
         self.after(0, lambda: self.output_btn.configure(state="normal"))
     
     def _process_single_pdf(self, pdf_path: Path) -> dict:
@@ -623,6 +633,7 @@ class MillsheetRenamerApp(CTkDnD):
         """Update progress bar and status"""
         self.progress_bar.set(progress)
         self.status_label.configure(text=status)
+        self.processing_label.configure(text=f"🔄 {status}")
     
     def _set_status(self, text: str, error: bool = False, show_progress: bool = False):
         """Set status bar text"""
